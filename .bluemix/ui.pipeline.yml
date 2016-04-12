@@ -37,7 +37,6 @@ stages:
       # Push app
       export CF_APP_NAME="dev-$CF_APP"
       cf push "${CF_APP_NAME}"
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
       # View logs
       #cf logs "${CF_APP_NAME}" --recent
 - name: QA
@@ -91,17 +90,6 @@ stages:
       # fi
     enable_tests: true
     test_file_pattern: '*.xml'
-  - name: Stop App
-    type: deployer
-    target:
-      region_id: ${QA_REGION_ID}
-      organization: ${QA_ORG_NAME}
-      space: ${QA_SPACE_NAME}
-      application: ${CF_APP_NAME}
-    script: |-
-      #!/bin/bash
-      # Push app
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
 - name: PROD
   inputs:
   - type: job
@@ -134,4 +122,3 @@ stages:
       ###curl "${APP_URL}/autoLoadTest.php?count=100&delay=0&action=start"
       # View logs
       #cf logs "${CF_APP_NAME}" --recent
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
