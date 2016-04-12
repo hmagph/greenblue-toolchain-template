@@ -151,10 +151,6 @@ stages:
       # deployer or from the manifest.yml file), the build number, and a 
       # timestamp (allowing multiple deploys for the same build).
       export CF_APP_NAME="${CF_APP}_${BUILD_NUMBER}_$(date +%s)"
-      # Domain can be customized if needed.
-      if ! [ "$DOMAIN" ]; then
-      	DOMAIN=mybluemix.net 
-      fi
       # Used to define a temporary route to test the newly deployed app
       TEST_HOST=$CF_APP_NAME
       # Java artifact being deployed. Needs to match output from 
@@ -166,7 +162,6 @@ stages:
       CF_TRACE=true
       echo -e "${label_color}Variables:${no_color}"
       echo "PUBLIC_HOST=$PUBLIC_HOST"
-      echo "DOMAIN=$DOMAIN"
       echo "CF_APP_NAME=$CF_APP_NAME"
       echo "TEST_HOST=$TEST_HOST"
       #############
@@ -183,7 +178,7 @@ stages:
       # Push the updates from the build to create a newly deployed application.
       #############
       echo -e "${label_color}Pushing new deployment - ${blue}$CF_APP_NAME${no_color}"
-      cf push $CF_APP_NAME -d $DOMAIN -n $TEST_HOST
+      cf push $CF_APP_NAME -n $TEST_HOST
       DEPLOY_RESULT=$?
       if [ $DEPLOY_RESULT -ne 0 ]; then
       	echo -e "${blue}Deployment of $CF_APP_NAME failed!!"
@@ -196,7 +191,8 @@ stages:
       # Inject testing to ensure that the new app version is good.
       #############
       echo -e "${label_color}Testing new app - ${blue}$CF_APP_NAME${no_color}"
-      curl "http://$TEST_HOST.$DOMAIN"
+      APP_URL=http://$(cf app $CF_APP_NAME | grep urls: | awk '{print $2}')
+      curl "$APP_URL"
       TEST_RESULT=$?
       if [ $TEST_RESULT -ne 0 ]; then
       	echo -e "${label_color}New app did not deploy properly - ${blue}$CF_APP_NAME${no_color}"
@@ -209,18 +205,18 @@ stages:
       # NOTE: The old version(s) is still taking traffic to avoid disruption in service.
       #############
       echo -e "${label_color}Map public space route to new app - ${green}$CF_APP_NAME${no_color}"
-      cf map-route $CF_APP_NAME $DOMAIN -n $PUBLIC_HOST
+      cf map-route $CF_APP_NAME -n $PUBLIC_HOST
       echo -e "${green}Public route bindings:${no_color}"
       cf routes | { grep $PUBLIC_HOST || true; }
       #############
       # Delete the temporary route that was used for testing since it is no longer needed.
       #############
       echo -e "${label_color}Remove and delete test route - ${blue}$TEST_HOST${no_color}"
-      cf unmap-route $CF_APP_NAME $DOMAIN -n $TEST_HOST
+      cf unmap-route $CF_APP_NAME -n $TEST_HOST
       if [ $? -ne 0 ]; then
       	echo -e "${label_color}Test route isn't mapped and doesn't need to be removed.${no_color}"
       fi
-      cf delete-route $DOMAIN -n $TEST_HOST -f
+      cf delete-route -n $TEST_HOST -f
       #############
       # Delete the old application(s) at this point. They are no longer needed.
       #############
