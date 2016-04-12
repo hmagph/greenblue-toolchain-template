@@ -39,7 +39,6 @@ stages:
       # Push app
       export CF_APP_NAME="dev-$CF_APP"
       cf push "${CF_APP_NAME}"
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
       # View logs
       #cf logs "${CF_APP_NAME}" --recent
 - name: QA
@@ -87,23 +86,13 @@ stages:
       #!/bin/bash
       npm install
       echo $APP_URL | grep "stage1"
-      # if [ $? -eq 0 ]; then
-      #    grunt test_fake
-      # else
-      #    grunt test_real
-      # fi
+      if [ $? -eq 0 ]; then
+        grunt test_fake
+      else
+        grunt test_real
+      fi
     enable_tests: true
     test_file_pattern: '*.xml'
-  - name: Stop App
-    type: deployer
-    target:
-      region_id: ${QA_REGION_ID}
-      organization: ${QA_ORG_NAME}
-      space: ${QA_SPACE_NAME}
-      application: ${CF_APP_NAME}
-    script: |-
-      #!/bin/bash
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
 - name: PROD
   inputs:
   - type: job
@@ -132,6 +121,5 @@ stages:
       # Push app
       export CF_APP_NAME="$CF_APP"
       cf push "${CF_APP_NAME}"
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
       # View logs
       #cf logs "${CF_APP_NAME}" --recent
