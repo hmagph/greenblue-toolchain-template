@@ -130,10 +130,6 @@ alerting:
 webide:
   service_id: orion
 
-#Active Deploy
-greenblue:
-  service_id: activedeploy
-  
 #Deployment
 deploy:
   schema: deploy.json
