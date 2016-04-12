@@ -56,16 +56,6 @@ stages:
       npm install -g npm@3.7.2 ### work around default npm 2.1.1 instability
       npm install
       grunt dev-fvt --no-color -f
-  - name: Stop App
-    type: deployer
-    target:
-      region_id: ${DEV_REGION_ID}
-      organization: ${DEV_ORG_NAME}
-      space: ${DEV_SPACE_NAME}
-      application: ${CF_APP_NAME}
-    script: |
-      #!/bin/bash
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
 - name: TEST
   inputs:
   - type: job
@@ -111,23 +101,13 @@ stages:
       #!/bin/bash
       npm install
       echo $APP_URL | grep "stage1"
-      # if [ $? -eq 0 ]; then
-      #    grunt test_fake
-      # else
-      #    grunt test_real
-      # fi
+      if [ $? -eq 0 ]; then
+        grunt test_fake
+      else
+        grunt test_real
+      fi
     enable_tests: true
     test_file_pattern: '*.xml'
-  - name: Stop App
-    type: deployer
-    target:
-      region_id: ${QA_REGION_ID}
-      organization: ${QA_ORG_NAME}
-      space: ${QA_SPACE_NAME}
-      application: ${CF_APP_NAME}
-    script: |
-      #!/bin/bash
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
 - name: PROD
   inputs:
   - type: job
@@ -167,32 +147,123 @@ stages:
       cf create-service cloudantNoSQLDB Shared myMicroservicesCloudant
       export CF_APP_NAME="${CF_APP}_${BUILD_NUMBER}"
       cf push "${CF_APP_NAME}" --no-route -i 1
-  - name: Active Rollout
+  - name: Green/Blue Deploy
     type: deployer
-    extension_id: ibm.devops.services.pipeline.devops.ad_start
     target:
       region_id: ${PROD_REGION_ID}
       organization: ${PROD_ORG_NAME}
       space: ${PROD_SPACE_NAME}
       application: ${CF_APP_NAME}
-    RAMPDOWN_DURATION: 1m
-    RAMPUP_DURATION: 2m
-    COMMAND: |-
-      #!/bin/bash
-      source ${EXT_DIR}/git_util.sh
-      git_retry clone https://github.com/Osthanes/update_service.git activedeploy
-      activedeploy/activedeploy_step_1.sh
-  - name: Active Cleanup
-    type: deployer
-    extension_id: ibm.devops.services.pipeline.devops.ad_finish
-    target:
-      region_id: ${PROD_REGION_ID}
-      organization: ${PROD_ORG_NAME}
-      space: ${PROD_SPACE_NAME}
-      application: ${CF_APP_NAME}
-    COMMAND: |-
-      #!/bin/bash
-      source ${EXT_DIR}/git_util.sh
-      git_retry clone https://github.com/Osthanes/update_service.git activedeploy
-      activedeploy/activedeploy_step_2.sh
-      cf stop "${CF_APP_NAME}" ### FOR LOAD TEST USERS (limited quotas)
+    script: |-
+			#!/bin/bash
+			#############
+			# Colors	#
+			#############
+			green='\e[0;32m'
+			blue='\e[0;34m'
+			label_color='\e[0;33m'
+			no_color='\e[0m' # No Color
+			#############
+			# Variables	#
+			#############
+			# Used to create a public route within the space for accessing the deployed 
+			# application. The reserved CF_SPACE variable (configured in the deployer) is 
+			# used to unique the route name per space.
+			if [ "${CF_SPACE}" == "prod" ]; then
+				PUBLIC_HOST=${CF_APP}
+			else
+				PUBLIC_HOST="${CF_SPACE}-${CF_APP}"
+			fi
+			# Compute a unique app name using the reserved CF_APP name (configured in the 
+			# deployer or from the manifest.yml file), the build number, and a 
+			# timestamp (allowing multiple deploys for the same build).
+			export CF_APP_NAME="${CF_APP}_${BUILD_NUMBER}_$(date +%s)"
+			# Domain can be customized if needed.
+			if ! [ "$DOMAIN" ]; then
+				DOMAIN=mybluemix.net 
+			fi
+			# Used to define a temporary route to test the newly deployed app
+			TEST_HOST=$CF_APP_NAME
+			# Java artifact being deployed. Needs to match output from 
+			# the build process.
+			WAR=Pipeline_hello1.war
+			MEMORY=256M
+			echo `cat /etc/*-release`
+			echo `cf --version`
+			CF_TRACE=true
+			echo -e "${label_color}Variables:${no_color}"
+			echo "PUBLIC_HOST=$PUBLIC_HOST"
+			echo "DOMAIN=$DOMAIN"
+			echo "CF_APP_NAME=$CF_APP_NAME"
+			echo "TEST_HOST=$TEST_HOST"
+			#############
+			# Find existing deployed apps (usually one) to the space based on the binding to the PUBLIC_HOST
+			#############
+			rm -f apps.txt
+			echo -e "${label_color}Find all existing deployments:${no_color}"
+			cf apps | { grep $PUBLIC_HOST || true; } | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g" &> apps.txt
+			cat apps.txt
+			# Store just the deployed application names
+			awk '{ print $1 }' apps.txt > app_names.txt
+			rm -f apps.txt
+			#############
+			# Push the updates from the build to create a newly deployed application.
+			#############
+			echo -e "${label_color}Pushing new deployment - ${blue}$CF_APP_NAME${no_color}"
+			cf push $CF_APP_NAME -d $DOMAIN -n $TEST_HOST
+			DEPLOY_RESULT=$?
+			if [ $DEPLOY_RESULT -ne 0 ]; then
+				echo -e "${blue}Deployment of $CF_APP_NAME failed!!"
+				cf logs $CF_APP_NAME --recent
+				return $DEPLOY_RESULT
+			fi
+			echo -e "${label_color}APPS:${no_color}"
+			cf apps | grep ${CF_APP}
+			#############
+			# Inject testing to ensure that the new app version is good.
+			#############
+			echo -e "${label_color}Testing new app - ${blue}$CF_APP_NAME${no_color}"
+			curl "http://$TEST_HOST.$DOMAIN"
+			TEST_RESULT=$?
+			if [ $TEST_RESULT -ne 0 ]; then
+				echo -e "${label_color}New app did not deploy properly - ${blue}$CF_APP_NAME${no_color}"
+				return $TEST_RESULT
+			else
+				echo -e "${label_color}Test PASSED!!!!${no_color}"	
+			fi
+			#############
+			# Map traffic to the new version by binding to the public host.
+			# NOTE: The old version(s) is still taking traffic to avoid disruption in service.
+			#############
+			echo -e "${label_color}Map public space route to new app - ${green}$CF_APP_NAME${no_color}"
+			cf map-route $CF_APP_NAME $DOMAIN -n $PUBLIC_HOST
+			echo -e "${green}Public route bindings:${no_color}"
+			cf routes | { grep $PUBLIC_HOST || true; }
+			#############
+			# Delete the temporary route that was used for testing since it is no longer needed.
+			#############
+			echo -e "${label_color}Remove and delete test route - ${blue}$TEST_HOST${no_color}"
+			cf unmap-route $CF_APP_NAME $DOMAIN -n $TEST_HOST
+			if [ $? -ne 0 ]; then
+				echo -e "${label_color}Test route isn't mapped and doesn't need to be removed.${no_color}"
+			fi
+			cf delete-route $DOMAIN -n $TEST_HOST -f
+			#############
+			# Delete the old application(s) at this point. They are no longer needed.
+			#############
+			while read name
+			do
+				if [ "$name" != "$CF_APP_NAME" ]; then
+					echo -e "${label_color}Deleting old deployed application - $name${no_color}"
+					cf delete $name -f
+				fi
+			done < app_names.txt
+			rm -f app_names.txt
+			#############
+			# Summary 	#
+			#############
+			echo -e "${label_color}Deployed Applications:${no_color}"
+			cf apps | grep ${CF_APP}
+			echo -e "${label_color}Public route bindings:${no_color}"
+			cf routes | grep $PUBLIC_HOST
+			echo -e "${label_color}You have successfully executed a rolling deployment of ${green}$CF_APP_NAME${no_color}."
