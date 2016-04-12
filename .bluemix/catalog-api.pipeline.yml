@@ -119,34 +119,7 @@ stages:
   - name: CF_APP_NAME
     value: undefined
     type: text
-  - name: APP_URL
-    value: undefined
-    type: text
-  - name: AD_ENDPOINT
-    value: http://cap-sg-prd-1.integration.ibmcloud.com:15749
-    type: text
-  - name: GROUP_SIZE
-    value: '2'
-    type: text
-  - name: TARGET_PLATFORM
-    value: CloudFoundry
-    type: text
-  - name: TEST_RESULT_FOR_AD
-    value: ''
-    type: text
   jobs:
-  - name: Passive Deploy
-    type: deployer
-    target:
-      region_id: ${PROD_REGION_ID}
-      organization: ${PROD_ORG_NAME}
-      space: ${PROD_SPACE_NAME}
-      application: ${CF_APP_NAME}
-    script: |-
-      #!/bin/bash
-      cf create-service cloudantNoSQLDB Shared myMicroservicesCloudant
-      export CF_APP_NAME="${CF_APP}_${BUILD_NUMBER}"
-      cf push "${CF_APP_NAME}" --no-route -i 1
   - name: Green/Blue Deploy
     type: deployer
     target:
